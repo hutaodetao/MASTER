@@ -1,146 +1,37 @@
-# M. A.S. T.E.R. Memory System
+# M. A. S. T. E. R.
+## Multi-Agent Synergized Task Execution with Persistent Memory
 
-Multi-Agent Synergized Task Execution with **Persistent Memory**
+> Windows 一键启动版 | 多渠道支持
 
-> Phase 1: Memory System - 记忆系统实现
+---## ⚡ 快速开始### 1. 下载ZIP 包并解压到任意位置### 2. 安装
+双击 `install. bat`，等待自动完成### 3. 启动
+双击 `启动 MASTER. bat`### 4. 使用
+浏览器自动打开 http://localhost:3---
 
-## 🌟 特性
+## 📋 首次配置### 配置 AI API Key1. 打开 `config. example. py`2. 填入你的 API Key（至少一个）：
+   - OpenAI: `OPENAI_API_KEY = "sk-..."`   - Claude: `ANTHROPIC_API_KEY = "sk- ant-..."`
+3. 另存为 `config. py`
 
-- **可插拔后端**：支持 Qdrant (向量数据库) / Builtin (本地文件) 多种存储
-- **混合检索**：稠密 + 稀疏向量混合搜索
-- **LLM 抽取**：自动从任务结果中抽取关键事实作为记忆
-- **上下文注入**：智能检索相关记忆并注入到 AI 上下文
+### 启用向量搜索（可选）
+如果需要语义记忆功能：
+1. 下载 Qdrant: https://github. com/ qdrant/qdrant/releases2. 解压后运行 `qdrant. exe`3. 修改 `config. py` 中 `MEMORY_BACKEND = "qdrant"`
 
-## 📦 安装
+---## 🎯 功能
+| 功能 | 状态 | 说明 |
+|:---|:---|:---|  | 多 AI 协作 | ✅ | 决策 AI 调度多个垂直 AI |
+| 记忆系统 | ✅ | 跨任务持久记忆 |
+| MCP 支持 | ✅ | 标准化工具协议 |
+| 动态干预 | ✅ | 执行中插入要求 |
+| 多渠道 | ✅ | Web/Telegram/Discord/飞书/Email |
+---## 📁 文件说明
 
-```bash
-pip install -r requirements.txt
-```
+```MASTER/├── install. bat          # 双击安装（首次使用）├── 启动 MASTER. bat      # 双击启动
+├── stop. bat             # 停止服务├── config. example. py   # 配置示例├── backend/│   ├── memory/        # 记忆系统│   ├── mcp/           # MCP 工具协议│   └── channels/      # 多渠道适配器│       ├── telegram_ adapter. py│       ├── discord_ adapter. py│       ├── feishu_ adapter. py│       ├── email_ adapter. py│       └── local_ adapter. py└── data/                 # 数据存储
+```---## 📡 渠道配置示例### Telegram```pythonChannelConfig(    channel_type=ChannelType.TELEGRAM,
+    bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",    enabled=True,)```### Discord```pythonChannelConfig(    channel_type=ChannelType.DISCORD,    bot_token="YOUR_DISCORD_BOT_TOKEN",    enabled=True,)```### 飞书```pythonChannelConfig(    channel_type=ChannelType.FEISHU,    api_key="YOUR_APP_ID",    api_secret="YOUR_APP_SECRET",    enabled=True,)```### Email (SMTP)```pythonChannelConfig(    channel_type=ChannelType.EMAIL,    api_key="your_email@gmail.com",    api_secret="your_app_password",    metadata={        "smtp_host": "smtp.gmail.com",        "smtp_port": 587,        "use_tls": True,    },    enabled=True,)```---## ❓ 常见问题
 
-## 🚀 快速开始
-
-### 1. 使用 Qdrant 后端
-
-```python
-import asyncio
-from memory import QdrantMemory, MemoryRetriever, AddMemoryRequest
-
-# 初始化
-memory = QdrantMemory(host="localhost", port=6333)
-
-# 创建检索器
-retriever = MemoryRetriever(memory, max_context_memories=3)
-
-async def main():
-    # 添加记忆
-    await memory.add(AddMemoryRequest(
-        bot_id="agent_001",
-        content="用户喜欢科幻小说，尤其是《三体》和《基地》系列",
-        metadata={"source": "chat", "topic": "preferences"}
-    ))
-    
-    # 检索记忆
-    context = await retriever.retrieve("agent_001", "用户有什么阅读偏好?")
-    print(context.to_prompt_context())
-
-asyncio.run(main())
-```
-
-### 2. 使用本地文件后端
-
-```python
-from memory import BuiltinMemory
-
-# 使用本地文件存储（无需额外依赖）
-memory = BuiltinMemory(storage_path="./data/memory", mode="sparse")
-```
-
-### 3. 记忆自动抽取
-
-```python
-from memory import MemoryExtractor
-
-# 创建抽取器（需要 LLM 客户端）
-extractor = MemoryExtractor(llm_client=openai_client)
-
-# 从任务结果中抽取记忆
-facts = await extractor.extract(
-    task_result="成功完成了用户的数据分析任务，生成了销售报告。报告包含华东区Q1销量同比增长25%的数据。",
-    task_description="数据分析任务"
-)
-
-print(facts.facts)  # ['华东区Q1销量同比增长25%', ...]
-print(facts.tags)   # ['销售报告', '数据分析', '华东区', ...]
-```
-
-## 🏗️ 架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Memory System Architecture               │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  用户任务 → LLM 抽取关键事实 → 向量存储 (Qdrant/Builtin)    │
-│                                                             │
-│  新任务 → 混合检索 → 上下文注入 → AI 执行                   │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  Provider (接口抽象)                                        │
-│  ├── QdrantMemory (向量数据库)                              │
-│  ├── BuiltinMemory (本地文件: off/sparse/dense)            │
-│  └── (可扩展: Mem0, OpenViking)                            │
-├─────────────────────────────────────────────────────────────┤
-│  Extractor (LLM 事实抽取)                                   │
-│  Retriever (智能检索 + 上下文注入)                          │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## 📁 文件结构
-
-```
-phase1-memory/
-├── backend/
-│   └── memory/
-│       ├── __init__.py           # 模块导出
-│       ├── provider.py           # Provider 接口定义
-│       ├── qdrant_backend.py     # Qdrant 实现
-│       ├── builtin_backend.py    # 本地文件实现
-│       ├── extractor.py          # LLM 事实抽取
-│       └── retriever.py          # 检索器
-├── requirements.txt
-├── package.json
-└── README.md
-```
-
-## 🔧 配置
-
-### Qdrant
-
-```python
-memory = QdrantMemory(
-    host="localhost",
-    port=6333,
-    api_key="your-api-key",  # 可选
-    vector_size=1536,        # OpenAI ada-002 默认维度
-    distance="Cosine",       # 距离度量
-)
-```
-
-### Builtin 本地存储
-
-```python
-memory = BuiltinMemory(
-    storage_path="./data/memory",
-    mode="sparse",  # off / sparse / dense
-)
-```
-
-| 模式 | 说明 | 依赖 |
-|:---|:---|:---|
-| off | 仅文件索引，无向量搜索 | 无 |
-| sparse | TF-IDF 稀疏向量 | scikit-learn |
-| dense | 语义向量 | sentence-transformers |
-
-## 📝 License
-
-MIT License
+**Q: 提示 "未检测到 Python"**
+> 下载安装 Python: https://www. python.org/downloads/> 记得勾选 "Add Python to PATH"**Q: 启动后显示错误**> 1. 检查 API Key 是否配置正确
+> 2. 检查端口是否被占用: `netstat -ano | findstr 8`**Q: 如何停止服务?**
+> 双击 `stop. bat`**Q: 想删除所有数据?**
+> 删除 `data` 文件夹---## 🔧 技术支持- GitHub: https://github.com/hutaodetao/MASTER- 问题反馈: GitHub Issues---## 📝 LicenseMIT License

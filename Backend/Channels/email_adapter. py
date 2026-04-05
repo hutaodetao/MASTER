@@ -1,0 +1,209 @@
+"""
+Email Adapter
+支持 SMTP 发送 + Webhook 接收（邮件回复）
+"""
+import asyncio
+import json
+import smtplib
+from datetime import datetime
+from email.encoders import encode_base64
+from email.mime.audio import MIMEAudio
+from email.mime.base import MIMEBase
+from email.mime.image import MIMEImage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from typing import Any
+from pathlib import Path
+import aiohttp
+from .adapter import (
+    ChannelAdapter, ChannelType, ChannelConfig,
+    Message, User, OutgoingMessage, MessageType
+)
+
+
+class EmailAdapter(ChannelAdapter):
+    """Email 适配器 - 支持 SMTP 发送"""
+    
+    def __init__(self, config: ChannelConfig):
+        self.config = config
+        self.smtp_host = config.metadata.get("smtp_host", "smtp.gmail.com")
+        self.smtp_port = config.metadata.get("smtp_port", 587)
+        self.smtp_user = config.api_key or ""
+        self.smtp_password = config.api_secret or ""  # 或 App Password
+        self.from_email = config.metadata.get("from_email", self.smtp_user)
+        self.use_tls = config.metadata.get("use_tls", True)
+        
+        # 收件处理
+        self._webhook_parser = EmailWebhookParser()
+    
+    @property
+    def channel_type(self) -> ChannelType:
+        return ChannelType.EMAIL
+    
+    async def initialize(self, config: ChannelConfig) -> bool:
+        """初始化 - 验证 SMTP 连接"""
+        try:
+            server = smtplib.SMTP(self.smtp_host, self.smtp_port) if self.smtp_port != 465 else smtplib.SMTP_SSL(self.smtp_host, self.smtp_port)
+            
+            if self.use_tls and self.smtp_port != 465:
+                server.starttls()
+            
+            server.login(self.smtp_user, self.smtp_password)
+            server.quit()
+            return True
+        except Exception as e:
+            print(f"Email init error: {e}")
+            return False
+    
+    def _build_message(
+        self,
+        to_email: str,
+        subject: str,
+        content: str,
+        message_typ: MessageType = MessageType.TEXT,
+    ) -> MIMEMultipart:
+        """构建邮件"""
+        msg = MIMEMultipart("alternative")
+        msg["From"] = self.from_email
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        
+        # 添加纯文本版本
+        text_part = MIMEText(content, "plain", "utf-8")
+        msg.attach(text_part)
+        
+        # 添加 HTML 版本（如果需要）
+        if message_typ == MessageType.TEXT:
+            # 简单转义 HTML
+            html_content = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            html_part = MIMEText(html_content, "html", "utf-8")
+            msg.attach(html_part)
+        
+        return msg
+    
+    async def send_message(self, user_id: str, message: OutgoingMessage) -> str | None:
+        """发送邮件"""
+        try:
+            # user_id 是邮箱地址
+            subject = message.metadata.get("subject", "来自 M. A. S. T. E. R. 的消息")
+            
+            msg = self._build_message(user_id, subject, message.content, message.message_type)
+            
+            # 连接发送
+            if self.smtp_port == 465:
+                server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port)
+            else:
+                server = smtplib.SMTP(self.smtp_host, self.smtp_port)
+                if self.use_tls:
+                    server.starttls()
+            
+            server.login(self.smtp_user, self.smtp_password)
+            server.send_message(msg)
+            server.quit()
+            
+            # 返回消息 ID（用时间戳模拟）
+            return f"email_{datetime.now().timestamp()}"
+        except Exception as e:
+            print(f"Email send error: {e}")
+            return Nonea<br
+:
+
+
+<parameter, str(e))
+    
+    async def send_message_by_conversation(self, conversation_id: str, message: OutgoingMessage) -> str | None:
+        """发送邮件（conversation_id 作为邮箱）"""
+        return await self.send_message(conversation_id, message)
+    
+    async def handle_webhook(self, payload: dict) -> Message | None:
+        """处理邮件 Webhook（如 SendGrid、Mailgun）"""
+        return self._webhook_parser.parse(payload)
+    
+    async def close(self):
+        """关闭连接"""
+        pass  # SMTP 按需连接
+
+
+class EmailWebhookParser:
+    """邮件 Webhook 解析器"""
+    
+    def parse(self, payload: dict) -> Message | None:
+        """解析邮件 Webhook
+        
+        支持格式:
+        - SendGrid: payload['envelope'], payload['headers']
+        - Mailgun: payload['sender'], payload['subject'], payload['body-plain']
+        - 自定义: 其他格式
+        """
+        # SendGrid 格式
+        if "envelope" in payload:
+            return self._parse_sendgrid(payload)
+        
+        # Mailgun 格式
+        if "sender" in payload and "body-plain" in payload:
+            return self._parse_mailgun(payload)
+        
+        # 其他格式
+        return self._parse_generic(payload)
+    
+    def _parse_sendgrid(self, payload: dict) -> Message:
+        """解析 SendGrid Webhook"""
+        envelope = json.loads(payload.get("envelope", "{}"))
+        
+        user = User(
+            id=envelope.get("from", ""),
+            name="",  # 需要从 header 获取
+            platform="email",
+        )
+        
+        return Message(
+            id=payload.get("spam_score", ""),
+            channel="email",
+            user=user,
+            content=payload.get("text", payload.get("html", "")),
+            message_type=MessageType.TEXT,
+            timestamp=datetime.now(),
+        )
+    
+    def _parse_mailgun(self, payload: dict) -> Message:
+        """解析 Mailgun Webhook"""
+        user = User(
+            id=payload.get("sender", ""),
+            name=payload.get("sender", "").split("@")[0],
+            platform="email",
+        )
+        
+        content = payload.get("body-plain", "") or payload.get("body-html", "")
+        
+        return Message(
+            id=payload.get("Message-Id", ""),
+            channel="email",
+            user=user,
+            content=content,
+            message_type=MessageType.TEXT,
+            timestamp=datetime.now(),
+            metadata={"subject": payload.get("subject", "")},
+        )
+    
+    def _parse_generic(self, payload: dict) -> Message | None:
+        """通用解析"""
+        sender = payload.get("from") or payload.get("sender") or payload.get("email")
+        content = payload.get("content") or payload.get("body") or payload.get("text")
+        
+        if not sender or not content:
+            return None
+        
+        user = User(
+            id=sender,
+            name=sender.split("@")[0],
+            platform="email",
+        )
+        
+        return Message(
+            id=payload.get("id", ""),
+            channel="email",
+            user=user,
+            content=content,
+            message_type=MessageType.TEXT,
+            timestamp=datetime.now(),
+        )
