@@ -1,17 +1,28 @@
-# M.A.S.T.E.R. Memory System
-# Core Dependencies
+# M. A. S. T. E. R. 依赖
+# Windows 一键安装包
+
+# Core
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# AI SDK
+openai>=1.0.0
+anthropic>=0.18.0
+
+# Memory System
 qdrant-client>=1.7.0
 sentence-transformers>=2.2.0
 numpy>=1.24.0
 scikit-learn>=1.3.0
 
-# Optional: For LLM-based extraction
-openai>=1.0.0
-anthropic>=0.18.0
+# Frontend (内嵌)
+# 前端使用独立目录，启动时自动安装
 
-# Testing
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
+# MCP
+aiohttp>=3.9.0
 
-# Development
-python-dotenv>=1.0.0
+# Utils
+httpx>=0.26.0
+python-multipart>=0.0.6

@@ -1,0 +1,322 @@
+"""
+MCP (Model Context Protocol) Client
+连接外部 MCP 服务器，调用工具服务
+"""
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable
+import asyncio
+import json
+ 
+ 
+class TransportType(str, Enum):
+    """MCP 传输类型"""
+    STDIO = "stdio"
+    HTTP = "http"
+    SSE = "sse"
+ 
+ 
+@dataclass
+class ToolDefinition:
+    """工具定义"""
+    name: str
+    description: str
+    input_schema: dict = field(default_factory=dict)
+    
+    def to_openai_format(self) -> dict:
+        """转换为 OpenAI 函数格式"""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.input_schema,
+            },
+        }
+ 
+ 
+@dataclass
+class ToolCallResult:
+    """工具调用结果"""
+    tool_name: str
+    result: Any
+    error: str | None = None
+    is_error: bool = False
+ 
+ 
+class MCPTransport(ABC):
+    """MCP 传输层抽象"""
+    
+    @abstractmethod
+    async def initialize(self) -> dict:
+        """初始化连接"""
+        pass
+    
+    @abstractmethod
+    async def call_tool(self, name: str, arguments: dict) -> Any:
+        """调用工具"""
+        pass
+    
+    @abstractmethod
+    async def list_tools(self) -> list[ToolDefinition]:
+        """列出可用工具"""
+        pass
+    
+    @abstractmethod
+    async def close(self):
+        """关闭连接"""
+        pass
+ 
+ 
+class StdioTransport(MCPTransport):
+    """Stdio 传输（本地进程）"""
+    
+    def __init__(self, command: str, args: list[str] = None, env: dict = None):
+        self.command = command
+        self.args = args or []
+        self.env = env or {}
+        self.process = None
+        self.request_id = 0
+        self._lock = asyncio.Lock()
+    
+    async def initialize(self) -> dict:
+        """启动进程并初始化"""
+        # 构建环境
+        import os
+        env = {**os.environ, **self.env}
+        
+        # 启动进程
+        self.process = await asyncio.create_subprocess_exec(
+            self.command,
+            *self.args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        
+        # 发送 initialize 请求
+        result = await self._send_request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "master-mcp-client",
+                "version": "1.0.0",
+            },
+        })
+        
+        return result
+    
+    async def _send_request(self, method: str, params: dict = None) -> dict:
+        """发送 JSON-RPC 请求"""
+        async with self._lock:
+            self.request_id += 1
+            request = {
+                "jsonrpc": "2.0",
+                "id": self.request_id,
+                "method": method,
+                "params": params or {},
+            }
+            
+            # 发送请求
+            request_str = json.dumps(request) + "\n"
+            self.process.stdin.write(request_str.encode())
+            await self.process.stdin.drain()
+            
+            # 读取响应
+            response_line = await self.process.stdout.readline()
+            response = json.loads(response_line.decode())
+            
+            if "error" in response:
+                raise Exception(response["error"])
+            
+            return response.get("result", {})
+    
+    async def call_tool(self, name: str, arguments: dict) -> Any:
+        """调用工具"""
+        result = await self._send_request("tools/call", {
+            "name": name,
+            "arguments": arguments,
+        })
+        return result.get("content", [])
+    
+    async def list_tools(self) -> list[ToolDefinition]:
+        """列出工具"""
+        result = await self._send_request("tools/list")
+        tools = result.get("tools", [])
+        
+        return [
+            ToolDefinition(
+                name=t["name"],
+                description=t.get("description", ""),
+                input_schema=t.get("inputSchema", {}),
+            )
+            for t in tools
+        ]
+    
+    async def close(self):
+        """关闭进程"""
+        if self.process:
+            self.process.terminate()
+            await self.process.wait()
+ 
+ 
+class HttpTransport(MCPTransport):
+    """HTTP/SSE 传输（远程服务器）"""
+    
+    def __init__(self, url: str, api_key: str = None):
+        self.url = url
+        self.api_key = api_key
+        self.session = None
+        self._request_id = 0
+        self._lock = asyncio.Lock()
+    
+    async def initialize(self) -> dict:
+        """HTTP 初始化"""
+        import aiohttp
+        
+        self.session = aiohttp.ClientSession(
+            headers={
+                "Content-Type": "application/json",
+                **( {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {} ),
+            }
+        )
+        
+        result = await self._send_request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "master-mcp-client",
+                "version": "1.0.0",
+            },
+        })
+        
+        return result
+    
+    async def _send_request(self, method: str, params: dict = None) -> dict:
+        """发送 HTTP 请求"""
+        async with self._lock:
+            self._request_id += 1
+            request = {
+                "jsonrpc": "2.0",
+                "id": self._request_id,
+                "method": method,
+                "params": params or {},
+            }
+            
+            async with self.session.post(self.url, json=request) as resp:
+                response = await resp.json()
+                
+                if "error" in response:
+                    raise Exception(response["error"])
+                
+                return response.get("result", {})
+    
+    async def call_tool(self, name: str, arguments: dict) -> Any:
+        """调用工具"""
+        result = await self._send_request("tools/call", {
+            "name": name,
+            "arguments": arguments,
+        })
+        return result.get("content", [])
+    
+    async def list_tools(self) -> list[ToolDefinition]:
+        """列出工具"""
+        result = await self._send_request("tools/list")
+        tools = result.get("tools", [])
+        
+        return [
+            ToolDefinition(
+                name=t["name"],
+                description=t.get("description", ""),
+                input_schema=t.get("inputSchema", {}),
+            )
+            for t in tools
+        ]
+    
+    async def close(self):
+        """关闭会话"""
+        if self.session:
+            await self.session.close()
+ 
+ 
+class MCPClient:
+    """MCP 客户端"""
+    
+    def __init__(self):
+        self.transport: MCPTransport | None = None
+        self.server_info: dict = {}
+        self._tools: list[ToolDefinition] = []
+    
+    async def connect_stdio(self, command: str, args: list[str] = None, env: dict = None) -> "MCPClient":
+        """通过 Stdio 连接"""
+        self.transport = StdioTransport(command, args, env)
+        self.server_info = await self.transport.initialize()
+        self._tools = await self.transport.list_tools()
+        return self
+    
+    async def connect_http(self, url: str, api_key: str = None) -> "MCPClient":
+        """通过 HTTP 连接"""
+        self.transport = HttpTransport(url, api_key)
+        self.server_info = await self.transport.initialize()
+        self._tools = await self.transport.list_tools()
+        return self
+    
+    @property
+    def tools(self) -> list[ToolDefinition]:
+        """可用工具列表"""
+        return self._tools
+    
+    def get_tool(self, name: str) -> ToolDefinition | None:
+        """获取指定工具"""
+        for tool in self._tools:
+            if tool.name == name:
+                return tool
+        return None
+    
+    async def call_tool(self, name: str, arguments: dict = None) -> ToolCallResult:
+        """调用工具"""
+        try:
+            result = await self.transport.call_tool(name, arguments or {})
+            return ToolCallResult(
+                tool_name=name,
+                result=result,
+            )
+        except Exception as e:
+            return ToolCallResult(
+                tool_name=name,
+                error=str(e),
+                is_error=True,
+            )
+    
+    async def call_tool_formatted(self, name: str, arguments: dict = None) -> str:
+        """调用工具并格式化结果"""
+        result = await self.call_tool(name, arguments)
+        
+        if result.is_error:
+            return f"❌ Error: {result.error}"
+        
+        # 格式化输出
+        if isinstance(result.result, list):
+            parts = []
+            for item in result.result:
+                if isinstance(item, dict):
+                    item_type = item.get("type", "text")
+                    if item_type == "text":
+                        parts.append(item.get("text", ""))
+                    elif item_type == "image":
+                        parts.append(f"[Image: {item.get('data', '')}]")
+                    elif item_type == "resource":
+                        parts.append(f"[Resource: {item.get('uri', '')}]")
+            return "\n".join(parts)
+        
+        return str(result.result)
+    
+    async def close(self):
+        """关闭连接"""
+        if self.transport:
+            await self.transport.close()
+    
+    def __repr__(self) -> str:
+        return f"MCPClient(server={self.server_info.get('serverInfo', {}).get('name', 'unknown')}, tools={len(self._tools)})"
